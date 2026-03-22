@@ -1,0 +1,15 @@
+pandas
+pydantic
+python-dotenv
+pypdf
+pymupdf
+pdfplumber
+langchain
+langchain-community
+langchain-core
+langchain-openai
+langchain-chroma
+langgraph
+grandalf
+crewai
+crewai-tools
