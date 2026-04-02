@@ -1,0 +1,19 @@
+{
+    "patient_number": 1,
+    "blood_pressure_abnormality": "Abnormal",
+    "age": 34,
+    "bmi": 23,
+    "sex": "Female",
+    "pregnancy": "Yes",
+    "smoking": "No",
+    "level_of_stress": "Normal",
+    "patient_avg_steps": 20966.3,
+    "AI_response": [
+        {
+            "risk_level": "Moderate",
+            "bmi_explanation": "A BMI of 23 is considered to be within the normal weight range, indicating a healthy body weight for your height.",
+            "diet_recommendation": "Maintain a balanced diet rich in fruits, vegetables, whole grains, and lean proteins. Monitor portion sizes and limit processed foods.",
+            "lifestyle_advice": "Continue to engage in regular physical activity, aiming for at least 150 minutes of moderate exercise per week. Manage stress through relaxation techniques such as yoga or meditation."
+        }
+    ]
+}
