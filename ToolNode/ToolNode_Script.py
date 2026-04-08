@@ -1,4 +1,4 @@
-import os
+import os, json
 import logging
 logging.basicConfig(level=logging.INFO)
 
@@ -216,18 +216,32 @@ def generate_node(state: RAGState) -> RAGState:
         HumanMessage(content=f"""Query: {state['query']}""")
     ]
 
-    response = state["llm"].invoke(final_prompt)
+    structured_llm = state["llm"].with_structured_output(AnswerSchema)
+    response = structured_llm.invoke(final_prompt)
     logging.info("Generated final answer")
-    return {"answer": response.content}
+
+    result = AnswerSchema(
+        query=state["query"],
+        route=state["route"],
+        answer=response.answer 
+    )
+
+    return {"answer": json.dumps(result.model_dump(), indent=4)}
 
 def web_search_node(state: RAGState) -> RAGState:
     logging.info("Running web_search/general LLM node")
 
-    response = state["llm"].invoke([
-        HumanMessage(content=state["query"])
-    ])
+    structured_llm = state["llm"].with_structured_output(AnswerSchema)
+    response = structured_llm.invoke([HumanMessage(content=state["query"])])
 
-    return {"answer": response.content}
+    result = AnswerSchema(
+        query=state["query"],
+        route=state["route"],
+        answer=response.answer 
+    )
+
+    #return {"answer": result}
+    return {"answer": json.dumps(result.model_dump(), indent=4)}
 
 # --------------------------------------------------
 # Build graph
