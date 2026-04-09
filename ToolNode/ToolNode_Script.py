@@ -49,6 +49,7 @@ GLOBAL_LLM = None
 # ---------------- NODE 1 ----------------
 def init_resources_node(state: RAGState) -> RAGState:
     logging.info("Init Resources node started...")
+    global GLOBAL_LLM, GLOBAL_CHROMA, GLOBAL_RAW_DOCS
 
     state["messages"] = [HumanMessage(content=state["query"])]
 
@@ -65,6 +66,9 @@ def init_resources_node(state: RAGState) -> RAGState:
         collection_name="syntel",
         embedding_function=state["embeddings"]
     )
+            
+    GLOBAL_CHROMA = state["chromaDB"]
+    GLOBAL_LLM = state["llm"]
 
     return state
 
@@ -92,12 +96,11 @@ def check_file_existance_node(state: RAGState) -> RAGState:
         from langchain_core.documents import Document
         state["raw_docs"] = [Document(page_content=text, metadata=meta) for text, meta in zip(raw_docs["documents"], raw_docs["metadatas"])]
 
-        GLOBAL_RAW_DOCS = state["raw_docs"]
-        GLOBAL_CHROMA = state["chromaDB"]
-        GLOBAL_LLM = state["llm"]
     else:
         state["file_exists"] = False
         logging.info(f"File Not Exists/Not Found --> Ingestion")
+
+    GLOBAL_RAW_DOCS = state["raw_docs"]
     
     return state
 
@@ -154,9 +157,28 @@ def hybrid_retriever(query: str) -> str:
 
     return context
 
+@tool
+def calculator(expression: str) -> str:
+    """Evaluate basic mathematical expressions like 2+2, 10*5, 100/4"""
+    import math
+
+    try:
+        result = eval(expression, {"__builtins__": {}}, {"math": math})
+        return str(result)
+    except Exception as e:
+        return f"Error: {str(e)}"
+    
+@tool
+def web_search(query: str) -> str:
+    """Generate response using llm"""
+    global GLOBAL_LLM
+    response = GLOBAL_LLM.invoke(query)
+
+    return response.content
+    
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, api_key=os.getenv("OPENAI_API_KEY"))
 
-tools = [hybrid_retriever]
+tools = [hybrid_retriever,calculator,web_search]
 llm_with_tools = llm.bind_tools(tools)
 tool_node = ToolNode(tools)
 
@@ -164,10 +186,12 @@ def agent_node(state: RAGState) -> RAGState:
     logging.info("Running Agent Node..")
 
     system_prompt = SystemMessage(content= """
-                                You are a RAG assistant.
+                                You are a Smart AI assistant.
                            
                            RULES:
-                            - If the user asks something that may depend on the indexed documents, call hybrid_retriever exactly once.
+                            - If the question is about documents → call hybrid_retriever exactly once.
+                            - If the question is a math calculation → call calculator.
+                            - If the question is abount general purpose or about news related → call web_search.
                             - Pass the user's original query exactly as-is to the tool.
                             - Use only the retrieved context to answer factual RAG questions.
                             - If the answer is not present in the retrieved context, say exactly: I Don't Know
@@ -203,22 +227,32 @@ def generate_node(state: RAGState) -> RAGState:
     if not context:
         logging.info("No context found. Returning I Don't Know")
         return {"answer": "Sorry, I Don't Know"}
-    
-    final_prompt = [
-        SystemMessage(content= f"""
-                    You are a strict RAG assistant.
-                    Use provided context only to generate answer.
-                    If answer is not present in the provided context then say, 'Sorry, I don't know.'
-                      
-                    Context:
-                    {context}
-                    """),
-        HumanMessage(content=f"""Query: {state['query']}""")
-    ]
+    elif context.strip().replace('.', '', 1).isdigit():
+        logging.info("Detected calculator result → returning directly")
 
-    structured_llm = state["llm"].with_structured_output(AnswerSchema)
-    response = structured_llm.invoke(final_prompt)
-    logging.info("Generated final answer")
+        result = AnswerSchema(
+            query=state["query"],
+            route=state["route"],
+            answer=context.strip())
+        
+        return {"answer": json.dumps(result.model_dump(), indent=4)}
+        
+    else:
+        final_prompt = [
+            SystemMessage(content= f"""
+                        You are a strict RAG assistant.
+                        Use provided context only to generate answer.
+                        If answer is not present in the provided context then say, 'Sorry, I don't know.'
+                          
+                        Context:
+                        {context}
+                        """),
+            HumanMessage(content=f"""Query: {state['query']}""")
+        ]
+
+        structured_llm = state["llm"].with_structured_output(AnswerSchema)
+        response = structured_llm.invoke(final_prompt)
+        logging.info("Generated final answer")
 
     result = AnswerSchema(
         query=state["query"],
@@ -228,10 +262,11 @@ def generate_node(state: RAGState) -> RAGState:
 
     return {"answer": json.dumps(result.model_dump(), indent=4)}
 
+"""
 def web_search_node(state: RAGState) -> RAGState:
     logging.info("Running web_search/general LLM node")
 
-    structured_llm = state["llm"].with_structured_output(AnswerSchema)
+    structured_llm = llm_with_tools.with_structured_output(AnswerSchema)
     response = structured_llm.invoke([HumanMessage(content=state["query"])])
 
     result = AnswerSchema(
@@ -240,8 +275,8 @@ def web_search_node(state: RAGState) -> RAGState:
         answer=response.answer 
     )
 
-    #return {"answer": result}
     return {"answer": json.dumps(result.model_dump(), indent=4)}
+"""
 
 # --------------------------------------------------
 # Build graph
@@ -255,14 +290,14 @@ builder.add_node("ingestion_node",ingestion_node)
 builder.add_node("tools", tool_node)
 builder.add_node("agent_node", agent_node)
 builder.add_node("generate_node", generate_node)
-builder.add_node("web_search_node", web_search_node)
+#builder.add_node("web_search_node", web_search_node)
 
 builder.add_edge(START, "init_resources_node")
 builder.add_edge("init_resources_node", "query_router_node")
 builder.add_conditional_edges("query_router_node", lambda state: "rag" if state["route"] == "rag" else "web",
                               {
                                   "rag": "check_file_existance_node",
-                                  "web": "web_search_node"
+                                  "web": "agent_node"
                               })
 builder.add_conditional_edges("check_file_existance_node", lambda state: "retriever" if state["file_exists"] else "ingestion",
                               {
@@ -278,7 +313,7 @@ builder.add_conditional_edges("agent_node", agent_router,
 builder.add_edge("ingestion_node", "agent_node")
 builder.add_edge("tools", "generate_node")
 builder.add_edge("generate_node", END)
-builder.add_edge("web_search_node", END)
+#builder.add_edge("web_search_node", END)
 
 app = builder.compile()
 
@@ -297,10 +332,3 @@ if __name__ == "__main__":
 
     print("\nFinal Answer: ")
     print(result["answer"])
-
-        
-
-
-
-
-
